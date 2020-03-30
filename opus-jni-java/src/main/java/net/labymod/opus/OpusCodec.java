@@ -14,205 +14,109 @@ but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY o
 You should have received a copy of the GNU General Public License along with this program. If not, see <https://www.gnu.org/licenses/>.
  */
 public class OpusCodec {
+    private final OpusCodecOptions options;
 
-    private final OpusCodecOptions opusOptions;
-    private boolean encoderInitialized = false;
-    private boolean decoderInitialized = false;
-    private long encoderState;
-    private long decoderState;
+    /*
+     * The following 2 byte arrays directly contain the data the native
+     * opus library uses to store the state of the decoder. Since destroying
+     * the decoder does nothing more than freeing it, we can skip this step
+     * and let the java garbage collector clean up the byte arrays for us.
+     */
+    private final byte[] encoderMemory;
+    private final byte[] decoderMemory;
 
-    private OpusCodec(OpusCodecOptions opusOptions) {
-        this.opusOptions = opusOptions;
+    /**
+     * Creates a new {@link OpusCodec} instance.
+     *
+     * @param options The options to create the instance with
+     * @throws IllegalArgumentException If some options are invalid
+     */
+    public OpusCodec(OpusCodecOptions options) {
+        this.options = options;
+        this.encoderMemory = createEncoder(options.getSampleRate(), options.getChannels(), options.getBitRate());
+        this.decoderMemory = createDecoder(options.getSampleRate(), options.getChannels());
     }
 
-    public int getFrameSize() {
-        return this.opusOptions.getFrameSize();
-    }
+    private static native byte[] createEncoder(int sampleRate, int channels, int bitrate);
 
-    public int getSampleRate() {
-        return this.opusOptions.getSampleRate();
-    }
-
-    public int getChannels() {
-        return this.opusOptions.getChannels();
-    }
-
-    public int getBitrate() {
-        return this.opusOptions.getBitrate();
-    }
-
-    public int getMaxFrameSize() {
-        return this.opusOptions.getMaxFrameSize();
-    }
-
-    public int getMaxPacketSize() {
-        return this.opusOptions.getMaxPacketSize();
-    }
-
-
-    public static OpusCodec createDefault() {
-        return newBuilder().build();
-    }
-
-    public static OpusCodec createByOptions(OpusCodecOptions opusCodecOptions) {
-        return new OpusCodec(opusCodecOptions);
-    }
-
-    public static Builder newBuilder() {
-        return new Builder();
-    }
-
+    private static native byte[] createDecoder(int sampleRate, int channels);
 
     /**
      * Encodes a chunk of raw PCM data.
      *
-     * @param bytes data to encode. Must have a length of CHANNELS * FRAMESIZE * 2.
-     * @return encoded data
-     * <p>
-     * throws {@link IllegalArgumentException} if bytes has an invalid length
+     * @param frame The chunk to encode
+     * @return The encoded chunk
+     * @throws IllegalArgumentException If the length of the chunk is not CHANNELS * FRAME_SIZE * 2
      */
-    public byte[] encodeFrame(byte[] bytes) {
-        return this.encodeFrame(bytes, 0, bytes.length);
+    public byte[] encodeFrame(byte[] frame) {
+        return encodeFrame(frame, 0, frame.length);
     }
 
     /**
-     * Encodes a chunk of raw PCM data.
+     * Encodes a chunk of raw PCM data from a specific area of a byte array.
      *
-     * @param bytes data to encode. Must have a length of CHANNELS * FRAMESIZE * 2.
-     * @return encoded data
-     * <p>
-     * throws {@link IllegalArgumentException} if length is invalid
+     * @param data   The byte array to extract the chunk from
+     * @param offset The offset where the chunk can be found
+     * @param length The length of the chunk
+     * @return The encoded chunk
+     * @throws IllegalArgumentException  If the length of the chunk is not CHANNELS * FRAME_SIZE * 2
+     * @throws IndexOutOfBoundsException If {@code data.length < length + offset}
      */
-    public byte[] encodeFrame(byte[] bytes, int offset, int length) {
-        if (length != getChannels() * getFrameSize() * 2)
-            throw new IllegalArgumentException(String.format("data length must be == CHANNELS * FRAMESIZE * 2 (%d bytes) but is %d bytes", getChannels() * getFrameSize() * 2, bytes.length));
-        this.ensureEncoderExistence();
-        return this.encodeFrame(this.encoderState, bytes, offset, length);
+    public byte[] encodeFrame(byte[] data, int offset, int length) {
+        if (length != options.getChannels() * options.getFrameSize() * 2) {
+            throw new IllegalArgumentException(String.format("Expected length to be %d, but got %d",
+                    options.getChannels() * options.getFrameSize() * 2, length));
+        } else if (data.length < offset + length) {
+            throw new IndexOutOfBoundsException("data.length is less than length + offset");
+        }
+
+        return encodeFrame0(encoderMemory, data, offset, length,
+                options.getMaxPacketSize(), options.getChannels(), options.getFrameSize());
     }
 
-    private native byte[] encodeFrame(long encoder, byte[] in, int offset, int length);
+    private static native byte[] encodeFrame0(
+            byte[] encoderMemory, byte[] data, int offset, int length, int maxPacketSize, int channels, int frameSize);
 
     /**
-     * Decodes a chunk of opus encoded pcm data.
+     * Decodes a chunk of encoded pcm data.
      *
-     * @param bytes data to decode. Length may vary because the less complex the encoded pcm data is, the compressed data size is smaller.
-     * @return encoded data.
+     * @param data The data to decode
+     * @return The decoded data
+     * @throws IllegalArgumentException If the data has an invalid format
      */
-    public byte[] decodeFrame(byte[] bytes) {
-        this.ensureDecoderExistence();
-        return this.decodeFrame(this.decoderState, bytes);
+    public byte[] decodeFrame(byte[] data) {
+        return decodeFrame(data, 0, data.length);
     }
-
-    private native byte[] decodeFrame(long decoder, byte[] out);
-
-
-    private void ensureEncoderExistence() {
-        if (this.encoderInitialized) return;
-        this.encoderState = this.createEncoder(this.opusOptions);
-        this.encoderInitialized = true;
-    }
-
-    private native long createEncoder(OpusCodecOptions opts);
-
-
-    private void ensureDecoderExistence() {
-        if (this.decoderInitialized) return;
-        this.decoderState = this.createDecoder(this.opusOptions);
-        this.decoderInitialized = true;
-    }
-
-    private native long createDecoder(OpusCodecOptions opts);
 
     /**
-     * destroys Opus encoder and decoder
+     * Decodes a chunk of encoded pcm data from a specific area of a byte array.
+     *
+     * @param data   The byte array to extract the chunk from
+     * @param offset The offset where the chunk can be found
+     * @param length The length of the chunk
+     * @return The decoded data
+     * @throws IllegalArgumentException  If the data has an invalid format
+     * @throws IndexOutOfBoundsException If {@code data.length < length + offset}
      */
-    public void destroy() {
-        if (this.encoderInitialized) this.destroyEncoder(this.encoderState);
-        if (this.decoderInitialized) this.destroyDecoder(this.decoderState);
+    public byte[] decodeFrame(byte[] data, int offset, int length) {
+        if (data.length < offset + length) {
+            throw new IndexOutOfBoundsException("data.length is less than length + offset");
+        }
+
+        return decodeFrame0(decoderMemory, data, offset, length, options.getMaxFrameSize(), options.getChannels());
     }
 
-    private native void destroyEncoder(long encoder);
+    private static native byte[] decodeFrame0(
+            byte[] decoderMemory, byte[] data, int offset, int length, int maxFrameSize, int channels);
 
-    private native void destroyDecoder(long decoder);
 
     /**
-     * Default settings should be good to use for most cases.
+     * Retrieves the options this codec was created with.
+     *
+     * @return The options this codec was created with
      */
-    public static class Builder {
-
-        private int frameSize = 960;
-        private int sampleRate = 48000;
-        private int channels = 1;
-        private int bitrate = 64000;
-        private int maxFrameSize = 6 * 960;
-        private int maxPacketSize = 3 * 1276;
-
-        private Builder() {
-        }
-
-        public int getFrameSize() {
-            return this.frameSize;
-        }
-
-        public Builder withFrameSize(int frameSize) {
-            this.frameSize = frameSize;
-            return this;
-        }
-
-        public int getSampleRate() {
-            return this.sampleRate;
-        }
-
-        /**
-         * @param sampleRate The sample rate to use in the codec instance.
-         *                   8, 12, 16, 24 and 48khz are supported.
-         * @return this
-         */
-        public Builder withSampleRate(int sampleRate) {
-            this.sampleRate = sampleRate;
-            return this;
-        }
-
-        public int getChannels() {
-            return this.channels;
-        }
-
-        public Builder withChannels(int channels) {
-            this.channels = channels;
-            return this;
-        }
-
-        public int getBitrate() {
-            return this.bitrate;
-        }
-
-        public Builder withBitrate(int bitrate) {
-            this.bitrate = bitrate;
-            return this;
-        }
-
-        public int getMaxFrameSize() {
-            return this.maxFrameSize;
-        }
-
-        public Builder withMaxFrameSize(int maxFrameSize) {
-            this.maxFrameSize = maxFrameSize;
-            return this;
-        }
-
-        public int getMaxPacketSize() {
-            return this.maxPacketSize;
-        }
-
-        public Builder withMaxPacketSize(int maxPacketSize) {
-            this.maxPacketSize = maxPacketSize;
-            return this;
-        }
-
-        public OpusCodec build() {
-            return new OpusCodec(OpusCodecOptions.of(frameSize, sampleRate, channels, bitrate, maxFrameSize, maxPacketSize));
-        }
-
+    public OpusCodecOptions getOptions() {
+        return options;
     }
 
     private static String getNativeLibraryName() {
@@ -228,12 +132,25 @@ public class OpusCodec {
         }
     }
 
+    /**
+     * Extracts the native library to the specified directory but does not load them.
+     *
+     * @param directory    The directory to extract the natives to
+     * @throws IOException If an error occurs while loading the native library
+     */
     public static void extractNative(File directory) throws IOException {
         String nativeLibraryName = getNativeLibraryName();
         Files.copy(OpusCodec.class.getResourceAsStream("/native-binaries/" + nativeLibraryName),
                 directory.toPath().resolve(nativeLibraryName));
     }
 
+    /**
+     * Loads the native library from the specified directory
+     * (which should have been set up with {@link OpusCodec#extractNative(File directory)}).
+     *
+     * @param directory             The directory to load the native library from
+     * @throws UnsatisfiedLinkError In case the native libraries fail to load
+     */
     public static void loadNative(File directory) {
         System.load(new File(directory, getNativeLibraryName()).getAbsolutePath());
     }
@@ -249,5 +166,14 @@ public class OpusCodec {
         temporaryDir.deleteOnExit();
         extractNative(temporaryDir);
         loadNative(temporaryDir);
+    }
+
+    /**
+     * Retrieves a builder filled with default values.
+     *
+     * @return A builder which can be used to create an {@link OpusCodec}
+     */
+    public static OpusCodecBuilder builder() {
+        return new OpusCodecBuilder();
     }
 }

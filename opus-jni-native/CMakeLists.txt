@@ -34,11 +34,12 @@ endif()
 # Project sources #
 ###################
 set(OPUS_JNI_NATIVE_SOURCES
-        src/opus_jni.c)
+        src/opus_jni.c
+        src/opus_jni_util.c)
 
 ##############
 # Add target #
 ##############
 add_library(opus-jni-native SHARED ${OPUS_JNI_NATIVE_SOURCES})
 target_link_libraries(opus-jni-native PUBLIC opus ${JNI_LIBRARIES})
-target_include_directories(opus-jni-native PUBLIC ${JNI_INCLUDE_DIRS} ${GENERATED_JNI_HEADERS_DIR})
+target_include_directories(opus-jni-native PUBLIC include ${JNI_INCLUDE_DIRS} ${GENERATED_JNI_HEADERS_DIR})

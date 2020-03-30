@@ -1,196 +1,166 @@
-/*
-opus-jni, a simple Opus JNI Wrapper.
-Copyright (C) 2020 LabyMedia GmbH This program is free software:
-you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free
-Software Foundation, either version 3 of the License, or (at your option) any later version. This program is distributed
-in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
-FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details. You should have received a copy
-of the GNU General Public License along with this program. If not, see <https://www.gnu.org/licenses/>.
-*/
-
-#include <jni.h>
 #include <opus.h>
-#include <opus_types.h>
-#include <stdio.h>
 #include <stdlib.h>
 
 #include "net_labymod_opus_OpusCodec.h"
+#include "opus_jni_util.h"
 
-#define APPLICATION OPUS_APPLICATION_AUDIO
-
-typedef struct _OpusCodecOptions {
-    int frameSize;
-    int sampleRate;
-    int channels;
-    int bitrate;
-    int maxFrameSize;
-    int maxPacketSize;
-} OpusCodecOptions;
-
-typedef struct _OpusEncodeInfo {
-    OpusEncoder *encoder;
-    OpusCodecOptions opts;
-} OpusEncodeInfo;
-
-typedef struct _OpusDecodeInfo {
-    OpusDecoder *decoder;
-    OpusCodecOptions opts;
-} OpusDecodeInfo;
-
-jbyteArray as_byte_array(JNIEnv *env, unsigned char *buf, int len) {
-    jbyteArray array = (*env)->NewByteArray(env, len);
-    (*env)->SetByteArrayRegion(env, array, 0, len, (jbyte *) (buf));
-    return array;
+JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *reserved) {
+    OPUS_JNI_UNUSED(vm);
+    OPUS_JNI_UNUSED(reserved);
+    return JNI_VERSION_1_1;
 }
 
-unsigned char *as_unsigned_char_array(JNIEnv *env, jbyteArray array) {
-    int len = (*env)->GetArrayLength(env, array);
-    unsigned char *buf = (unsigned char *) malloc(len * sizeof(unsigned char));
-    (*env)->GetByteArrayRegion(env, array, 0, len, (jbyte *) (buf));
-    return buf;
-}
+JNIEXPORT jbyteArray JNICALL Java_net_labymod_opus_OpusCodec_createEncoder(
+    JNIEnv *env, jclass caller, jint sample_rate, jint channels, jint bit_rate) {
+    OPUS_JNI_UNUSED(caller);
 
-OpusCodecOptions readOpusCodecOptions(JNIEnv *env, jobject obj) {
-    OpusCodecOptions opts;
-
-    jclass clsOpusCodecOptions;
-
-    jfieldID fFrameSize;
-    jfieldID fSampleRate;
-    jfieldID fChannels;
-    jfieldID fBitrate;
-    jfieldID fMaxFrameSize;
-    jfieldID fMaxPacketSize;
-
-    clsOpusCodecOptions = (*env)->GetObjectClass(env, obj);
-
-    fFrameSize = (*env)->GetFieldID(env, clsOpusCodecOptions, "frameSize", "I");
-    fSampleRate = (*env)->GetFieldID(env, clsOpusCodecOptions, "sampleRate", "I");
-    fChannels = (*env)->GetFieldID(env, clsOpusCodecOptions, "channels", "I");
-    fBitrate = (*env)->GetFieldID(env, clsOpusCodecOptions, "bitrate", "I");
-    fMaxFrameSize = (*env)->GetFieldID(env, clsOpusCodecOptions, "maxFrameSize", "I");
-    fMaxPacketSize = (*env)->GetFieldID(env, clsOpusCodecOptions, "maxPacketSize", "I");
-
-    opts.frameSize = (*env)->GetIntField(env, obj, fFrameSize);
-    opts.sampleRate = (*env)->GetIntField(env, obj, fSampleRate);
-    opts.channels = (*env)->GetIntField(env, obj, fChannels);
-    opts.bitrate = (*env)->GetIntField(env, obj, fBitrate);
-    opts.maxFrameSize = (*env)->GetIntField(env, obj, fMaxFrameSize);
-    opts.maxPacketSize = (*env)->GetIntField(env, obj, fMaxPacketSize);
-
-    return opts;
-}
-
-JNIEXPORT jlong JNICALL Java_net_labymod_opus_OpusCodec_createEncoder(JNIEnv *env, jobject inst, jobject obj) {
-    OpusEncoder *encoder;
-    OpusCodecOptions opts;
-    OpusEncodeInfo *info = (OpusEncodeInfo *) malloc(sizeof(OpusEncodeInfo));
-    int err;
-
-    opts = readOpusCodecOptions(env, obj);
-    encoder = opus_encoder_create((opus_int32) opts.sampleRate, opts.channels, APPLICATION, &err);
-    if(err < 0) {
-        fprintf(stderr, "failed to create encoder: %s\n", opus_strerror(err));
-        return -1;
+    size_t encoder_size = opus_encoder_get_size(channels);
+    if(!encoder_size) {
+        throw_illegal_argument_exception(env, "Channels must be 1 or 2");
+        return NULL;
     }
 
-    err = opus_encoder_ctl(encoder, OPUS_SET_BITRATE(opts.bitrate));
-    if(err < 0) {
-        fprintf(stderr, "failed to set bitrate: %s\n", opus_strerror(err));
-        return -1;
+    int opus_error;
+
+    OpenedJavaByteArray encoder_memory = create_and_open_java_byte_array(env, encoder_size);
+    if((opus_error = opus_encoder_init((OpusEncoder *) encoder_memory.data,
+                                       sample_rate,
+                                       channels,
+                                       OPUS_APPLICATION_AUDIO)) != OPUS_OK) {
+        if(opus_error == OPUS_BAD_ARG) {
+            throw_illegal_argument_exception(
+                env, "Invalid sample rate, can only be one of 48000, 24000, 16000, 12000 or 8000");
+        } else {
+            throw_opus_error(env, opus_error, opus_strerror(opus_error));
+        }
+        return NULL;
     }
 
-    info->encoder = encoder;
-    info->opts = opts;
+    opus_error = opus_encoder_ctl((OpusEncoder *) encoder_memory.data, OPUS_SET_BITRATE(bit_rate));
+    if(opus_error != OPUS_OK) {
+        throw_opus_error(env, opus_error, opus_strerror(opus_error));
+        return NULL;
+    }
 
-    return (jlong) info;
+    return close_java_byte_array(env, &encoder_memory);
 }
 
-JNIEXPORT jlong JNICALL Java_net_labymod_opus_OpusCodec_createDecoder(JNIEnv *env, jobject inst, jobject obj) {
-    OpusDecoder *decoder;
-    OpusCodecOptions opts;
-    OpusDecodeInfo *info = (OpusDecodeInfo *) malloc(sizeof(OpusDecodeInfo));
-    int err;
+JNIEXPORT jbyteArray JNICALL Java_net_labymod_opus_OpusCodec_createDecoder(JNIEnv *env,
+                                                                           jclass caller,
+                                                                           jint sample_rate,
+                                                                           jint channels) {
+    OPUS_JNI_UNUSED(caller);
 
-    opts = readOpusCodecOptions(env, obj);
-    decoder = opus_decoder_create(opts.sampleRate, opts.channels, &err);
-    if(err < 0) {
-        fprintf(stderr, "failed to create decoder: %s\n", opus_strerror(err));
-        return -1;
+    size_t decoder_size = opus_decoder_get_size(channels);
+    if(!decoder_size) {
+        throw_illegal_argument_exception(env, "Channels must be 1 or 2");
+        return NULL;
     }
 
-    info->decoder = decoder;
-    info->opts = opts;
+    int opus_error;
 
-    return (jlong) info;
+    OpenedJavaByteArray decoder_memory = create_and_open_java_byte_array(env, decoder_size);
+    if((opus_error = opus_decoder_init((OpusDecoder *) decoder_memory.data, sample_rate, channels)) != OPUS_OK) {
+        if(opus_error == OPUS_BAD_ARG) {
+            throw_illegal_argument_exception(
+                env, "Invalid sample rate, can only be one of 48000, 24000, 16000, 12000 or 8000");
+        } else {
+            throw_opus_error(env, opus_error, opus_strerror(opus_error));
+        }
+        return NULL;
+    }
+
+    return close_java_byte_array(env, &decoder_memory);
 }
 
-JNIEXPORT jbyteArray JNICALL Java_net_labymod_opus_OpusCodec_encodeFrame(
-    JNIEnv *env, jobject inst, jlong pointer, jbyteArray in_buff, jint in_buff_offset, jint in_buff_length) {
-    OpusEncodeInfo *info = (OpusEncodeInfo *) pointer;
-    int i, nbBytes;
-    jbyteArray out;
-    unsigned char *pcm_bytes = as_unsigned_char_array(env, in_buff);
-    unsigned char *cbits = (unsigned char *) malloc(info->opts.maxPacketSize);
-    opus_int16 *in = malloc(sizeof(opus_int16) * info->opts.frameSize * info->opts.channels * 2);
+JNIEXPORT jbyteArray JNICALL Java_net_labymod_opus_OpusCodec_encodeFrame0(JNIEnv *env,
+                                                                          jclass caller,
+                                                                          jbyteArray encoder,
+                                                                          jbyteArray data,
+                                                                          jint offset,
+                                                                          jint length,
+                                                                          jint max_packet_size,
+                                                                          jint channels,
+                                                                          jint frame_size) {
+    OPUS_JNI_UNUSED(caller);
 
-    for(i = 0; i < in_buff_length / 2; i++) {
-        in[i] = pcm_bytes[in_buff_offset + 2 * i + 1] << 8 | pcm_bytes[in_buff_offset + 2 * i];
+    OpenedJavaByteArray opened_encoder = open_java_byte_array(env, encoder, JNI_FALSE);
+    OpenedJavaByteArray opened_data = open_java_byte_array(env, data, JNI_TRUE);
+
+    opus_int16 *input = malloc(sizeof(opus_int16) * frame_size * channels * 2);
+
+    for(uint32_t i = 0; i < length / 2; i++) {
+        input[i] = opened_data.data[offset + 2 * i + 1] << 8 | opened_data.data[offset + 2 * i];
     }
-    nbBytes = opus_encode(info->encoder, in, info->opts.frameSize, cbits, info->opts.maxPacketSize);
-    if(nbBytes < 0) {
-        fprintf(stderr, "encode failed: %s\n", opus_strerror(nbBytes));
-        return (*env)->NewByteArray(env, 0);
+
+    unsigned char *output = malloc(max_packet_size);
+
+    opus_int32 num_bytes = opus_encode((OpusEncoder *) opened_encoder.data,
+                                       input,
+                                       frame_size,
+                                       output,
+                                       max_packet_size);
+
+    free(input);
+    close_java_byte_array(env, &opened_data);
+    close_java_byte_array(env, &opened_encoder);
+
+    if(num_bytes < 0) {
+        free(output);
+        throw_opus_error(env, num_bytes, "Failed to encode frame");
+        return NULL;
     }
-    out = as_byte_array(env, cbits, nbBytes);
 
-    free(in);
-    free(cbits);
-    free(pcm_bytes);
+    jbyteArray java_output = (*env)->NewByteArray(env, num_bytes);
+    (*env)->SetByteArrayRegion(env, java_output, 0, num_bytes, (const jbyte *) output);
+    free(output);
 
-    return out;
+    return java_output;
 }
 
-JNIEXPORT jbyteArray JNICALL Java_net_labymod_opus_OpusCodec_decodeFrame(JNIEnv *env,
-                                                                         jobject inst,
-                                                                         jlong pointer,
-                                                                         jbyteArray in_buff) {
-    OpusDecodeInfo *info = (OpusDecodeInfo *) pointer;
-    int i, frame_size, len, out_len;
-    jbyteArray out_buff;
-    unsigned char *pcm_bytes;
-    unsigned char *cbits = as_unsigned_char_array(env, in_buff);
-    opus_int16 *out = malloc(sizeof(opus_int16) * info->opts.maxFrameSize * info->opts.channels);
+JNIEXPORT jbyteArray JNICALL Java_net_labymod_opus_OpusCodec_decodeFrame0(JNIEnv *env,
+                                                                          jclass caller,
+                                                                          jbyteArray decoder,
+                                                                          jbyteArray data,
+                                                                          jint offset,
+                                                                          jint length,
+                                                                          jint max_frame_size,
+                                                                          jint channels) {
+    OPUS_JNI_UNUSED(caller);
 
-    len = (*env)->GetArrayLength(env, in_buff);
-    frame_size = opus_decode(info->decoder, cbits, len, out, info->opts.maxFrameSize, 0);
+    OpenedJavaByteArray opened_decoder = open_java_byte_array(env, decoder, JNI_FALSE);
+    OpenedJavaByteArray opened_data = open_java_byte_array(env, data, JNI_TRUE);
+
+    opus_int16 *output = malloc(sizeof(opus_uint16) * max_frame_size * channels);
+
+    int frame_size = opus_decode((OpusDecoder *) opened_decoder.data,
+                                (const unsigned char *) opened_data.data + offset,
+                                length,
+                                output,
+                                max_frame_size,
+                                0);
+
+    close_java_byte_array(env, &opened_data);
+    close_java_byte_array(env, &opened_decoder);
+
     if(frame_size < 0) {
-        fprintf(stderr, "decoder failed\n");
-        return (*env)->NewByteArray(env, 0);
+        if(frame_size == OPUS_INVALID_PACKET) {
+            throw_illegal_argument_exception(env, "Input data is not a valid packet");
+        } else {
+            throw_opus_error(env, frame_size, "Failed to decode data");
+        }
+        return NULL;
     }
 
-    out_len = info->opts.channels * frame_size * 2;
-    pcm_bytes = (unsigned char *) malloc(out_len);
+    size_t raw_output_size = channels * frame_size * 2;
+    OpenedJavaByteArray raw_output = create_and_open_java_byte_array(env, raw_output_size);
 
-    for(i = 0; i < info->opts.channels * frame_size; i++) {
-        pcm_bytes[2 * i] = out[i] & 0xFF;
-        pcm_bytes[2 * i + 1] = (out[i] >> 8) & 0xFF;
+    for(size_t i = 0; i < channels * frame_size; i++) {
+        raw_output.data[2 * i] = output[i] & 0xFF;
+        raw_output.data[2 * i + 1] = (output[i] >> 8) & 0xFF;
     }
 
-    out_buff = as_byte_array(env, pcm_bytes, out_len);
-    free(out);
-    free(pcm_bytes);
-    return out_buff;
-}
+    free(output);
 
-JNIEXPORT void JNICALL Java_net_labymod_opus_OpusCodec_destroyEncoder(JNIEnv *env, jobject inst, jlong pointer) {
-    OpusEncodeInfo *info = (OpusEncodeInfo *) pointer;
-    opus_encoder_destroy(info->encoder);
-    free(info);
-}
-
-JNIEXPORT void JNICALL Java_net_labymod_opus_OpusCodec_destroyDecoder(JNIEnv *env, jobject inst, jlong pointer) {
-    OpusDecodeInfo *info = (OpusDecodeInfo *) pointer;
-    opus_decoder_destroy(info->decoder);
-    free(info);
+    return close_java_byte_array(env, &raw_output);
 }

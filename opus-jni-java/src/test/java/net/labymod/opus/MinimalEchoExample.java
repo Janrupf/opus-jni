@@ -2,6 +2,7 @@ package net.labymod.opus;
 
 import javax.sound.sampled.*;
 import java.io.IOException;
+import java.util.Arrays;
 
 public class MinimalEchoExample {
     private static AudioFormat format =
@@ -10,7 +11,7 @@ public class MinimalEchoExample {
     public static void main(String[] args) throws LineUnavailableException, IOException {
         OpusCodec.setupWithTemporaryFolder();
 
-        OpusCodec codec = OpusCodec.createDefault();
+        OpusCodec codec = OpusCodec.builder().build();
 /*
     Could also use the builder to customize the codec.
     OpusCodec.newBuilder()
@@ -33,7 +34,7 @@ public class MinimalEchoExample {
 
         while (true) {
             //Reading microphone data
-            byte[] data = new byte[codec.getChannels() * codec.getFrameSize() * 2];
+            byte[] data = new byte[codec.getOptions().getChannels() * codec.getOptions().getFrameSize() * 2];
             microphone.read(data, 0, data.length);
 
             //Encoding PCM data chunk
@@ -41,6 +42,7 @@ public class MinimalEchoExample {
 
             //Decoding PCM data chunk
             byte[] decoded = codec.decodeFrame(encode);
+
             speaker.write(decoded, 0, decoded.length);
         }
     }
