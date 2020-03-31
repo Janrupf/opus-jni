@@ -5,6 +5,8 @@ opus-jni is a very simple and comfortable to use JNI wrapper for the
 It might lack a few functions of the original Opus codec specifications but should be perfectly
 fine for most usecases.
 
+[![CI](https://github.com/LabyMod/opus-jni/workflows/CI/badge.svg)](https://github.com/LabyMod/opus-jni/actions?query=workflow%3ACI)
+
 See [here](./opus-jni-java/src/test/java/net/labymod/opus/MinimalEchoExample.java) for a very
 simple and complete echo example.
 ## How to use:
@@ -54,6 +56,7 @@ For further details, refer to the [Github workflow](./.github/workflows/ci.yml).
 - Recommended bitrates for your purpose found 
   [here](https://wiki.xiph.org/index.php?title=Opus_Recommended_Settings&mobileaction=toggle_view_desktop)
 - The default codec settings should be fine for every simple VoIP communication
+- Unused instances of OpusCodec must be removed to prevent memory leaks with ```OpusCodec#destroy```. This might not be critical when using only a fixed amount of instances, but can get dangerous when those instances have a life cycle and might be recreated once in a while.
 
 #### Create a codec instance:
 ###### Default settings

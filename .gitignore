@@ -2,4 +2,4 @@
 build/
 cmake-build*/
 .gradle/
-hs_err_pid*.log
+*.log
